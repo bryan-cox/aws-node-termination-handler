@@ -1,0 +1,16 @@
+reviewers:
+- bryan-cox
+- clebs
+- csrwng
+- devguyio
+- jparrill
+- muraee
+- Nirshal
+- sdminonne
+approvers:
+- bryan-cox
+- csrwng
+- devguyio
+- jparrill
+- muraee
+component: hypershift

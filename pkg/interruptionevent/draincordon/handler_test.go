@@ -14,7 +14,9 @@ import (
 	"github.com/aws/aws-node-termination-handler/pkg/uptime"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/kubectl/pkg/drain"
 )
 
@@ -70,5 +72,63 @@ func TestHandleEvent_PreDrainFailureSkipsCordonAndPostDrainTask(t *testing.T) {
 	}
 	if updatedNode.Spec.Unschedulable {
 		t.Fatal("node was cordoned after pre-drain failure")
+	}
+}
+
+func TestHandleEvent_TransientNodeLookupErrorDoesNotDeleteSQSMessage(t *testing.T) {
+	const nodeName = "test-node"
+	preDrainErr := errors.New("taint update failed")
+	postDrainCalls := 0
+
+	client := fake.NewSimpleClientset(&corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: nodeName},
+	})
+	transientErr := errors.New("transient API error")
+	client.PrependReactor("list", "nodes", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, transientErr
+	})
+	client.PrependReactor("get", "nodes", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, transientErr
+	})
+
+	testNode, err := node.NewWithValues(config.Config{}, &drain.Helper{
+		Ctx:    context.TODO(),
+		Client: client,
+	}, uptime.Uptime)
+	if err != nil {
+		t.Fatalf("create test node: %v", err)
+	}
+
+	nthConfig := config.Config{
+		CordonOnly:                 true,
+		DeleteSqsMsgIfNodeNotFound: true,
+	}
+	handler := New(
+		interruptioneventstore.New(nthConfig),
+		*testNode,
+		nthConfig,
+		ec2metadata.NodeMetadata{},
+		observability.Metrics{},
+		observability.K8sEventRecorder{},
+	)
+	drainEvent := &monitor.InterruptionEvent{
+		EventID:  "transient-node-lookup-event",
+		Kind:     monitor.RebalanceRecommendationKind,
+		NodeName: nodeName,
+		PreDrainTask: func(monitor.InterruptionEvent, node.Node) error {
+			return preDrainErr
+		},
+		PostDrainTask: func(monitor.InterruptionEvent, node.Node) error {
+			postDrainCalls++
+			return nil
+		},
+	}
+
+	err = handler.HandleEvent(drainEvent)
+	if !errors.Is(err, preDrainErr) {
+		t.Fatalf("expected pre-drain error %v, got %v", preDrainErr, err)
+	}
+	if postDrainCalls != 0 {
+		t.Fatalf("post-drain task was called %d times after a transient node lookup error", postDrainCalls)
 	}
 }

@@ -75,7 +75,9 @@ func (h *Handler) HandleEvent(drainEvent *monitor.InterruptionEvent) error {
 			Interface("fallbackNodeLabels", drainEvent.NodeLabels).
 			Str("nodeName", nodeName).
 			Msg("Failed to get node labels. Proceeding with fallback labels")
-		nodeFound = false
+		if errors.IsNotFound(err) {
+			nodeFound = false
+		}
 	} else {
 		drainEvent.NodeLabels = nodeLabels
 	}
@@ -90,7 +92,7 @@ func (h *Handler) HandleEvent(drainEvent *monitor.InterruptionEvent) error {
 				h.commonHandler.RunPostDrainTask(nodeName, drainEvent)
 				return nil
 			}
-			
+
 			return err
 		}
 	}
